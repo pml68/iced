@@ -75,6 +75,7 @@ where
 {
     content: Element<'a, Message, Theme, Renderer>,
     on_press: Option<OnPress<'a, Message>>,
+    on_release: Option<OnPress<'a, Message>>,
     width: Length,
     height: Length,
     padding: Padding,
@@ -110,6 +111,7 @@ where
         Button {
             content,
             on_press: None,
+            on_release: None,
             width: size.width.fluid(),
             height: size.height.fluid(),
             padding: DEFAULT_PADDING,
@@ -164,6 +166,36 @@ where
     /// If `None`, the [`Button`] will be disabled.
     pub fn on_press_maybe(mut self, on_press: Option<Message>) -> Self {
         self.on_press = on_press.map(OnPress::Direct);
+        self
+    }
+
+    /// Sets the message that will be produced when the [`Button`] is released.
+    ///
+    /// Unless `on_release` is called, the [`Button`] will be disabled.
+    pub fn on_release(mut self, on_release: Message) -> Self {
+        self.on_release = Some(OnPress::Direct(on_release));
+        self
+    }
+
+    /// Sets the message that will be produced when the [`Button`] is released.
+    ///
+    /// This is analogous to [`Button::on_release`], but using a closure to produce
+    /// the message.
+    ///
+    /// This closure will only be called when the [`Button`] is actually released and,
+    /// therefore, this method is useful to reduce overhead if creating the resulting
+    /// message is slow.
+    pub fn on_release_with(mut self, on_release: impl Fn() -> Message + 'a) -> Self {
+        self.on_release = Some(OnPress::Closure(Box::new(on_release)));
+        self
+    }
+
+    /// Sets the message that will be produced when the [`Button`] is released,
+    /// if `Some`.
+    ///
+    /// If `None`, the [`Button`] will be disabled.
+    pub fn on_release_maybe(mut self, on_release: Option<Message>) -> Self {
+        self.on_release = on_release.map(OnPress::Direct);
         self
     }
 
@@ -286,7 +318,7 @@ where
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
             | Event::Touch(touch::Event::FingerPressed { .. }) => {
-                if self.on_press.is_some() {
+                if self.on_press.is_some() || self.on_release.is_some() {
                     let bounds = layout.bounds();
 
                     if cursor.is_over(bounds) {
@@ -294,13 +326,17 @@ where
 
                         state.is_pressed = true;
 
+                        if let Some(on_press) = &self.on_press {
+                            shell.publish(on_press.get());
+                        }
+
                         shell.capture_event();
                     }
                 }
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
             | Event::Touch(touch::Event::FingerLifted { .. }) => {
-                if let Some(on_press) = &self.on_press {
+                if self.on_press.is_some() || self.on_release.is_some() {
                     let state = tree.state.downcast_mut::<State>();
 
                     if state.is_pressed {
@@ -308,8 +344,10 @@ where
 
                         let bounds = layout.bounds();
 
-                        if cursor.is_over(bounds) {
-                            shell.publish(on_press.get());
+                        if let Some(on_release) = &self.on_release
+                            && cursor.is_over(bounds)
+                        {
+                            shell.publish(on_release.get());
                         }
 
                         shell.capture_event();
@@ -324,7 +362,7 @@ where
             _ => {}
         }
 
-        let current_status = if self.on_press.is_none() {
+        let current_status = if self.on_press.is_none() && self.on_release.is_none() {
             Status::Disabled
         } else if cursor.is_over(layout.bounds()) {
             let state = tree.state.downcast_ref::<State>();
@@ -402,7 +440,7 @@ where
     ) -> mouse::Interaction {
         let is_mouse_over = cursor.is_over(layout.bounds());
 
-        if is_mouse_over && self.on_press.is_some() {
+        if is_mouse_over && (self.on_press.is_some() || self.on_release.is_some()) {
             mouse::Interaction::Pointer
         } else {
             mouse::Interaction::default()
